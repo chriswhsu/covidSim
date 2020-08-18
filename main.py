@@ -1,6 +1,6 @@
-# This is a sample Python script.
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
+# Chris Hsu
+# Simulate covid case data and issues surrounding using Episode Date in a current window metric.
+
 
 from datetime import date, timedelta
 import random
@@ -8,6 +8,52 @@ import logging
 import pandas as pd
 
 logging.basicConfig(level=logging.DEBUG)
+
+
+class DelayGenerator:
+    min_test_result_delay = 0  # noninclusive
+    max_test_result_delay = 0  # noninclusive
+    mode_test_result_delay = 0
+
+    min_reporting_delay = 0  # noninclusive
+    max_reporting_delay = 0  # noninclusive
+    mode_reporting_delay = 0
+
+    pct_tested_with_symptoms = 0
+    min_get_tested_delay = 0  # noninclusive
+    max_get_tested_delay = 0  # noninclusive
+    mode_get_tested_delay = 0
+
+    @staticmethod
+    def get_min_delay():
+        return round(DelayGenerator.min_test_result_delay + DelayGenerator.min_reporting_delay)
+
+    @staticmethod
+    def get_max_delay():
+        return round(
+            DelayGenerator.max_get_tested_delay + DelayGenerator.max_test_result_delay + DelayGenerator.max_reporting_delay)
+
+    @staticmethod
+    def get_test_result_delay():
+
+        return round(random.triangular(DelayGenerator.min_test_result_delay, DelayGenerator.max_test_result_delay,
+                                       DelayGenerator.mode_test_result_delay))
+
+    @staticmethod
+    def get_reporting_delay():
+
+        return round(random.triangular(DelayGenerator.min_reporting_delay, DelayGenerator.max_reporting_delay,
+                                       DelayGenerator.mode_reporting_delay))
+
+    @staticmethod
+    def get_days_after_symptoms_tested():
+
+        random_number = random.randint(1, 100)
+        if random_number <= DelayGenerator.pct_tested_with_symptoms:
+            return round(random.triangular(DelayGenerator.min_get_tested_delay, DelayGenerator.max_get_tested_delay,
+                                           DelayGenerator.mode_get_tested_delay))
+        else:
+            return None
 
 
 class CaseGenerator:
@@ -78,51 +124,6 @@ class CovidCase:
         logging.info("___________________________________")
 
 
-class DelayGenerator:
-    min_test_result_delay = 15  # noninclusive
-    max_test_result_delay = 16  # noninclusive
-    mode_test_result_delay = 15
-
-    min_reporting_delay = 0  # noninclusive
-    max_reporting_delay = 0  # noninclusive
-    mode_reporting_delay = 0
-
-    pct_tested_with_symptoms = 5
-    min_get_tested_delay = 1  # noninclusive
-    max_get_tested_delay = 5  # noninclusive
-    mode_get_tested_delay = 3
-
-    @staticmethod
-    def get_min_delay():
-        return round(DelayGenerator.min_test_result_delay + DelayGenerator.min_reporting_delay)
-
-    @staticmethod
-    def get_max_delay():
-        return round(
-            DelayGenerator.max_get_tested_delay + DelayGenerator.max_test_result_delay + DelayGenerator.max_reporting_delay)
-
-    @staticmethod
-    def get_test_result_delay():
-
-        return round(random.triangular(DelayGenerator.min_test_result_delay, DelayGenerator.max_test_result_delay,
-                                       DelayGenerator.mode_test_result_delay))
-
-    @staticmethod
-    def get_reporting_delay():
-
-        return round(random.triangular(DelayGenerator.min_reporting_delay, DelayGenerator.max_reporting_delay,
-                                       DelayGenerator.mode_reporting_delay))
-
-    @staticmethod
-    def get_days_after_symptoms_tested():
-
-        random_number = random.randint(1, 100)
-        if random_number <= DelayGenerator.pct_tested_with_symptoms:
-            return round(random.triangular(DelayGenerator.min_get_tested_delay, DelayGenerator.max_get_tested_delay,
-                                           DelayGenerator.mode_get_tested_delay))
-        else:
-            return None
-
 
 def build_backdata(reporting_start_date, reporting_end_date, number_of_cases_per_day, sliding_window_size):
     logging.info("We will start reporting as of: {0}".format(reporting_start_date))
@@ -151,7 +152,7 @@ if __name__ == '__main__':
 
     rep_start_date = date(2020, 8, 1)
     rep_end_date = date(2020, 8, 17)
-    daily_cases = 100
+    daily_cases = 10
     sliding_window_size = 14
 
     bucket_df = build_backdata(rep_start_date, rep_end_date, daily_cases, sliding_window_size)
@@ -167,19 +168,19 @@ if __name__ == '__main__':
 
     active_date = date(2020,8,5)
 
-    # making boolean series for a team name
-    filter = bucket_df["report_to_state_date"] <= active_date
+    # data filter
+    # was this reported to the state before the reporting date
+    has_it_been_reported_filter = bucket_df["report_to_state_date"] <= active_date
+    filtered_df = bucket_df.where(has_it_been_reported_filter, inplace=False)
+    # logging.debug(filtered_df)
 
-    # filtering data
-    filtered_df = bucket_df.where(filter, inplace=False)
+    time_window_filter = bucket_df["report_to_state_date"] > (active_date - timedelta(days=14))
 
-    filter2 = bucket_df["report_to_state_date"] >= (active_date - timedelta(days=14))
-
-    final_rd_filter_df = filtered_df.where(filter2, inplace=False)
+    final_rd_filter_df = filtered_df.where(time_window_filter, inplace=False)
     logging.info("Cases Based on Reporting Date")
     logging.info(final_rd_filter_df.count())
 
-    filter3 = bucket_df["episode_date"] >= (active_date - timedelta(days=14))
+    filter3 = bucket_df["episode_date"] > (active_date - timedelta(days=14))
 
     final_ed_filter_df = filtered_df.where(filter3, inplace=False)
     logging.info("Cases Based on Episode Date")
