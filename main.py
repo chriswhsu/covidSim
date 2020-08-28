@@ -1,52 +1,53 @@
 # Chris Hsu
 # Simulate covid case data and issues surrounding using Episode Date in a current window metric.
 
-
-from datetime import date, timedelta
-import random
 import logging
+import random
+from datetime import date, timedelta
+
 import pandas as pd
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 
 class DelayGenerator:
     min_test_result_delay = 0  # noninclusive
-    max_test_result_delay = 0  # noninclusive
-    mode_test_result_delay = 0
+    max_test_result_delay = 40  # noninclusive
+    mode_test_result_delay = 20
 
     min_reporting_delay = 0  # noninclusive
     max_reporting_delay = 0  # noninclusive
     mode_reporting_delay = 0
 
-    pct_tested_with_symptoms = 0
+    pct_tested_with_symptoms = 10
     min_get_tested_delay = 0  # noninclusive
-    max_get_tested_delay = 0  # noninclusive
-    mode_get_tested_delay = 0
+    max_get_tested_delay = 5  # noninclusive
+    mode_get_tested_delay = 10
 
-    @staticmethod
-    def get_min_delay():
+    def __init__(self, min_result_delay, max_result_delay, mode_result_delay):
+
+        DelayGenerator.min_test_result_delay = min_result_delay
+        DelayGenerator.max_test_result_delay = max_result_delay
+        DelayGenerator.mode_test_result_delay = mode_result_delay
+
+    def get_min_delay(self):
         return round(DelayGenerator.min_test_result_delay + DelayGenerator.min_reporting_delay)
 
-    @staticmethod
-    def get_max_delay():
+    def get_max_delay(self):
         return round(
             DelayGenerator.max_get_tested_delay + DelayGenerator.max_test_result_delay + DelayGenerator.max_reporting_delay)
 
-    @staticmethod
-    def get_test_result_delay():
+    def get_test_result_delay(self):
 
         return round(random.triangular(DelayGenerator.min_test_result_delay, DelayGenerator.max_test_result_delay,
                                        DelayGenerator.mode_test_result_delay))
 
-    @staticmethod
-    def get_reporting_delay():
+    def get_reporting_delay(self):
 
         return round(random.triangular(DelayGenerator.min_reporting_delay, DelayGenerator.max_reporting_delay,
                                        DelayGenerator.mode_reporting_delay))
 
-    @staticmethod
-    def get_days_after_symptoms_tested():
+    def get_days_after_symptoms_tested(self):
 
         random_number = random.randint(1, 100)
         if random_number <= DelayGenerator.pct_tested_with_symptoms:
@@ -58,16 +59,19 @@ class DelayGenerator:
 
 class CaseGenerator:
 
-    @staticmethod
-    def create_case(sample_date):
+    def __init__(self, delay_gen):
+        pass
 
-        symptom_preceded = DelayGenerator.get_days_after_symptoms_tested()
+    @staticmethod
+    def create_case(delay_gen, sample_date):
+
+        symptom_preceded = delay_gen.get_days_after_symptoms_tested()
         if symptom_preceded:
             symptom_date = sample_date - timedelta(days=symptom_preceded)
         else:
             symptom_date = None
-        lab_result_date = sample_date + timedelta(days=DelayGenerator.get_test_result_delay())
-        report_to_state_date = lab_result_date + timedelta(days=DelayGenerator.get_reporting_delay())
+        lab_result_date = sample_date + timedelta(days=delay_gen.get_test_result_delay())
+        report_to_state_date = lab_result_date + timedelta(days=delay_gen.get_reporting_delay())
 
         new_case = CovidCase(symptom_date, sample_date, lab_result_date, report_to_state_date)
 
@@ -124,68 +128,110 @@ class CovidCase:
         logging.info("___________________________________")
 
 
+def build_backdata(delay_gen, reporting_start_date, reporting_end_date, number_of_cases_per_day, sliding_window_size):
+    myCg = CaseGenerator(delay_gen)
 
-def build_backdata(reporting_start_date, reporting_end_date, number_of_cases_per_day, sliding_window_size):
     logging.info("We will start reporting as of: {0}".format(reporting_start_date))
-    start_generating_cases_date = (reporting_start_date - timedelta(days=sliding_window_size+1)) - timedelta(DelayGenerator.get_max_delay())
+    start_generating_cases_date = (reporting_start_date - timedelta(days=sliding_window_size + 1)) - timedelta(delay_gen.get_max_delay())
     logging.debug("start case generation: {0}".format(start_generating_cases_date))
 
-    all_cases =[]
+    all_cases = []
     logging.info(
         "Given the max delay of {0} from episode date until reporting date, we will generate cases starting:{1}".format(
-            DelayGenerator.get_max_delay(), start_generating_cases_date))
-    for x in range((reporting_end_date - start_generating_cases_date).days + 1):
+            delay_gen.get_max_delay(), start_generating_cases_date))
+    for x in range((reporting_end_date - start_generating_cases_date).days + 2):
 
         active_date = start_generating_cases_date + timedelta(days=x)
         for x in range(number_of_cases_per_day):
-            all_cases.append(myCg.create_case(active_date).to_list())
-
+            all_cases.append(myCg.create_case(delay_gen, active_date).to_list())
 
     logging.info("Done generating cases.")
 
     return pd.DataFrame(data=all_cases)
 
+def filter_dataframe_episode(bucket_df, date_of_data_build, report_date):
+    # logging.info("build_date:{0}".format(date_of_data_build))
+    # logging.info("report_date:{0}".format(report_date))
 
-###############################################################################################
-if __name__ == '__main__':
-    myCg = CaseGenerator()
+    has_it_been_reported_filter = bucket_df["report_to_state_date"] <= report_date
+    filtered_df = bucket_df.where(has_it_been_reported_filter, inplace=False)
 
-    rep_start_date = date(2020, 8, 1)
-    rep_end_date = date(2020, 8, 17)
-    daily_cases = 10
+    filter3 = filtered_df["episode_date"] > (date_of_data_build - timedelta(days=14))
+    filtered_df.where(filter3, inplace=True)
+
+    filter4 = filtered_df["episode_date"] <= (date_of_data_build)
+    filtered_df.where(filter4, inplace=True)
+
+    # logging.info(filtered_df)
+
+    return filtered_df
+
+
+def filter_dataframe_report(bucket_df, date_of_data_build, report_date):
+
+    has_it_been_reported_filter = bucket_df["report_to_state_date"] <= report_date
+    filtered_df = bucket_df.where(has_it_been_reported_filter, inplace=False)
+
+    filter3 = filtered_df["report_to_state_date"] > (date_of_data_build - timedelta(days=14))
+    filtered_df.where(filter3, inplace=True)
+
+    filter4 = filtered_df["report_to_state_date"] <= (date_of_data_build)
+    filtered_df.where(filter4, inplace=True)
+
+    return filtered_df
+
+def generate_stats(dg):
+    # for now just generating data to support 1 days report.
+    report_date = date(2020, 8, 8)
+
+    date_of_data_build = date(2020, 8, 8) - timedelta(days=3)
+
+    daily_cases = 1000
     sliding_window_size = 14
-
-    bucket_df = build_backdata(rep_start_date, rep_end_date, daily_cases, sliding_window_size)
-
+    bucket_df = build_backdata(delay_gen=dg,
+                               reporting_start_date=date_of_data_build,
+                               reporting_end_date=report_date,
+                               number_of_cases_per_day=daily_cases,
+                               sliding_window_size=sliding_window_size)
+    # set column headers on dataframe
     bucket_df.columns = ['symptom_date', 'sample_date', 'lab_result_date', 'report_to_state_date', 'episode_date']
-
-    pd.set_option('display.max_rows', None)
-    # logging.debug(bucket_df)
-
     # get dataframe for a given reporting date.
-    # note that for a given reporting date report_to_state_date must be <= reporting date, or we don't have the data yet.
-
-
-    active_date = date(2020,8,5)
 
     # data filter
-    # was this reported to the state before the reporting date
-    has_it_been_reported_filter = bucket_df["report_to_state_date"] <= active_date
-    filtered_df = bucket_df.where(has_it_been_reported_filter, inplace=False)
-    # logging.debug(filtered_df)
+    # get records reported to the state before or on the report date?
+    output_df = filter_dataframe_episode(bucket_df, date_of_data_build, report_date)
+    lag_episode_date_count = output_df.count()[1]
 
-    time_window_filter = bucket_df["report_to_state_date"] > (active_date - timedelta(days=14))
+    output_df = filter_dataframe_episode(bucket_df, report_date, report_date)
+    no_lag_episode_date_count = output_df.count()[1]
 
-    final_rd_filter_df = filtered_df.where(time_window_filter, inplace=False)
-    logging.info("Cases Based on Reporting Date")
-    logging.info(final_rd_filter_df.count())
+    output_df = filter_dataframe_report(bucket_df, report_date, report_date)
+    rep_date_count = output_df.count()[1]
 
-    filter3 = bucket_df["episode_date"] > (active_date - timedelta(days=14))
-
-    final_ed_filter_df = filtered_df.where(filter3, inplace=False)
-    logging.info("Cases Based on Episode Date")
-
-    logging.info(final_ed_filter_df.count())
-    logging.info("********************************")
+    return rep_date_count, lag_episode_date_count, no_lag_episode_date_count
 
 
+
+
+###############################################################################################
+def run_job():
+    results = []
+    for x in range(31):
+        dg = DelayGenerator(0, 2 * x, x)
+        rep_date_count, episode_date_count, no_lag_epi_count = generate_stats(dg)
+
+        logging.debug("Cases Based on Reporting Date:{0}".format(rep_date_count))
+        logging.debug("Cases Based on Episode Date:{0}".format(episode_date_count))
+
+        logging.debug("********************************")
+
+        results.append([x, rep_date_count, episode_date_count, no_lag_epi_count])
+
+    result_df = pd.DataFrame(results)
+
+    logging.info(result_df)
+
+
+if __name__ == '__main__':
+    pd.set_option('display.max_rows', None)
+    run_job()
