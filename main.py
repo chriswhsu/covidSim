@@ -12,17 +12,17 @@ logging.basicConfig(level=logging.INFO)
 
 class DelayGenerator:
     min_test_result_delay = 0  # noninclusive
-    max_test_result_delay = 40  # noninclusive
-    mode_test_result_delay = 20
+    max_test_result_delay = 0  # noninclusive
+    mode_test_result_delay = 0
 
     min_reporting_delay = 0  # noninclusive
     max_reporting_delay = 0  # noninclusive
     mode_reporting_delay = 0
 
-    pct_tested_with_symptoms = 10
+    pct_tested_with_symptoms = 0
     min_get_tested_delay = 0  # noninclusive
-    max_get_tested_delay = 5  # noninclusive
-    mode_get_tested_delay = 10
+    max_get_tested_delay = 0  # noninclusive
+    mode_get_tested_delay = 0
 
     def __init__(self, min_result_delay, max_result_delay, mode_result_delay):
 
@@ -184,10 +184,10 @@ def generate_stats(dg):
     # for now just generating data to support 1 days report.
     report_date = date(2020, 8, 8)
 
-    date_of_data_build = date(2020, 8, 8) - timedelta(days=3)
+    date_of_data_build = date(2020, 8, 8) - timedelta(days=7)
 
     daily_cases = 1000
-    sliding_window_size = 14
+    sliding_window_size = 7
     bucket_df = build_backdata(delay_gen=dg,
                                reporting_start_date=date_of_data_build,
                                reporting_end_date=report_date,
@@ -216,7 +216,7 @@ def generate_stats(dg):
 ###############################################################################################
 def run_job():
     results = []
-    for x in range(31):
+    for x in range(21):
         dg = DelayGenerator(0, 2 * x, x)
         rep_date_count, episode_date_count, no_lag_epi_count = generate_stats(dg)
 
