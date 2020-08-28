@@ -118,7 +118,8 @@ class CovidCase:
         return self.report_to_state_date
 
     def to_list(self):
-        return [self.symptom_date, self.sample_date, self.lab_result_date, self.report_to_state_date, self.episode_date()]
+        return [self.symptom_date, self.sample_date, self.lab_result_date, self.report_to_state_date,
+                self.episode_date()]
 
     def display(self):
         logging.info("Symptoms: {0}".format(self.symptom_date))
@@ -128,38 +129,39 @@ class CovidCase:
         logging.info("___________________________________")
 
 
-def build_backdata(delay_gen, reporting_start_date, reporting_end_date, number_of_cases_per_day, sliding_window_size):
+def build_backdata(delay_gen, reporting_date, reporting_lag, number_of_cases_per_day, sliding_window_size):
     myCg = CaseGenerator(delay_gen)
 
-    logging.info("We will start reporting as of: {0}".format(reporting_start_date))
-    start_generating_cases_date = (reporting_start_date - timedelta(days=sliding_window_size + 1)) - timedelta(delay_gen.get_max_delay())
+    logging.info("We are reporting as of: {0}".format(reporting_date))
+    start_generating_cases_date = (reporting_date - timedelta(days=sliding_window_size + reporting_lag + delay_gen.get_max_delay() + 1))
     logging.debug("start case generation: {0}".format(start_generating_cases_date))
 
     all_cases = []
     logging.info(
         "Given the max delay of {0} from episode date until reporting date, we will generate cases starting:{1}".format(
             delay_gen.get_max_delay(), start_generating_cases_date))
-    for x in range((reporting_end_date - start_generating_cases_date).days + 2):
+    for day in range((reporting_date - start_generating_cases_date).days + 2):
 
-        active_date = start_generating_cases_date + timedelta(days=x)
-        for x in range(number_of_cases_per_day):
+        active_date = start_generating_cases_date + timedelta(days=day)
+        for case in range(number_of_cases_per_day):
             all_cases.append(myCg.create_case(delay_gen, active_date).to_list())
 
     logging.info("Done generating cases.")
 
     return pd.DataFrame(data=all_cases)
 
-def filter_dataframe_episode(bucket_df, date_of_data_build, report_date):
+
+def filter_dataframe_episode(bucket_df, window_end_date, report_date, window_size):
     # logging.info("build_date:{0}".format(date_of_data_build))
     # logging.info("report_date:{0}".format(report_date))
 
     has_it_been_reported_filter = bucket_df["report_to_state_date"] <= report_date
     filtered_df = bucket_df.where(has_it_been_reported_filter, inplace=False)
 
-    filter3 = filtered_df["episode_date"] > (date_of_data_build - timedelta(days=14))
+    filter3 = filtered_df["episode_date"] > (window_end_date - timedelta(days=window_size))
     filtered_df.where(filter3, inplace=True)
 
-    filter4 = filtered_df["episode_date"] <= (date_of_data_build)
+    filter4 = filtered_df["episode_date"] <= (window_end_date)
     filtered_df.where(filter4, inplace=True)
 
     # logging.info(filtered_df)
@@ -167,12 +169,11 @@ def filter_dataframe_episode(bucket_df, date_of_data_build, report_date):
     return filtered_df
 
 
-def filter_dataframe_report(bucket_df, date_of_data_build, report_date):
-
+def filter_dataframe_report(bucket_df, date_of_data_build, report_date, window_size):
     has_it_been_reported_filter = bucket_df["report_to_state_date"] <= report_date
     filtered_df = bucket_df.where(has_it_been_reported_filter, inplace=False)
 
-    filter3 = filtered_df["report_to_state_date"] > (date_of_data_build - timedelta(days=14))
+    filter3 = filtered_df["report_to_state_date"] > (date_of_data_build - timedelta(days=window_size))
     filtered_df.where(filter3, inplace=True)
 
     filter4 = filtered_df["report_to_state_date"] <= (date_of_data_build)
@@ -180,52 +181,51 @@ def filter_dataframe_report(bucket_df, date_of_data_build, report_date):
 
     return filtered_df
 
-def generate_stats(dg):
+
+def generate_stats(dg, sliding_window_size, daily_cases, reporting_lag):
     # for now just generating data to support 1 days report.
     report_date = date(2020, 8, 8)
 
-    date_of_data_build = date(2020, 8, 8) - timedelta(days=7)
 
-    daily_cases = 1000
-    sliding_window_size = 7
     bucket_df = build_backdata(delay_gen=dg,
-                               reporting_start_date=date_of_data_build,
-                               reporting_end_date=report_date,
+                               reporting_date=report_date,
+                               reporting_lag=reporting_lag,
                                number_of_cases_per_day=daily_cases,
                                sliding_window_size=sliding_window_size)
     # set column headers on dataframe
     bucket_df.columns = ['symptom_date', 'sample_date', 'lab_result_date', 'report_to_state_date', 'episode_date']
     # get dataframe for a given reporting date.
 
+    window_end_date = report_date - timedelta(days=reporting_lag)
+
     # data filter
     # get records reported to the state before or on the report date?
-    output_df = filter_dataframe_episode(bucket_df, date_of_data_build, report_date)
+    output_df = filter_dataframe_episode(bucket_df, window_end_date, report_date, sliding_window_size)
     lag_episode_date_count = output_df.count()[1]
 
-    output_df = filter_dataframe_episode(bucket_df, report_date, report_date)
-    no_lag_episode_date_count = output_df.count()[1]
-
-    output_df = filter_dataframe_report(bucket_df, report_date, report_date)
+    output_df = filter_dataframe_report(bucket_df, report_date, report_date, sliding_window_size)
     rep_date_count = output_df.count()[1]
 
-    return rep_date_count, lag_episode_date_count, no_lag_episode_date_count
-
-
+    return rep_date_count, lag_episode_date_count
 
 
 ###############################################################################################
 def run_job():
     results = []
+    reporting_lag = 7
+    window_size = 7
+    daily_cases = 2000
+
     for x in range(21):
         dg = DelayGenerator(0, 2 * x, x)
-        rep_date_count, episode_date_count, no_lag_epi_count = generate_stats(dg)
+        rep_date_count, episode_date_count = generate_stats(dg, window_size, daily_cases, reporting_lag)
 
         logging.debug("Cases Based on Reporting Date:{0}".format(rep_date_count))
         logging.debug("Cases Based on Episode Date:{0}".format(episode_date_count))
 
         logging.debug("********************************")
 
-        results.append([x, rep_date_count, episode_date_count, no_lag_epi_count])
+        results.append([x, rep_date_count, episode_date_count])
 
     result_df = pd.DataFrame(results)
 
